@@ -1,22 +1,22 @@
 {
-  "name": "captcha-register-login-calendar",
+  "name": "learning-capcha-backend",
   "version": "1.0.0",
-  "private": true,
-  "main": "server.js",
+  "main": "api/index.js",
   "scripts": {
-    "start": "node server.js",
-    "client:dev": "cd client ; npm install ; npm run dev",
-    "client:build": "cd client ; npm install ; npm run build"
+    "start": "node api/index.js",
+    "dev": "nodemon api/index.js"
   },
   "dependencies": {
-    "bcrypt": "^5.1.0",
-    "body-parser": "^1.20.2",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "mongoose": "^7.5.1",
-    "serverless-http": "^3.2.0",
+    "body-parser": "^1.20.2",
+    "mongoose": "^7.6.3",
+    "bcrypt": "^5.1.1",
+    "uuid": "^9.0.1",
+    "cors": "^2.8.5",
     "svg-captcha": "^1.4.0",
-    "uuid": "^9.0.0"
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   }
 }
