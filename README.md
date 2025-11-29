@@ -32,10 +32,13 @@ This project now uses a React + Tailwind frontend in the `client/` folder. Two w
 	- Open a terminal in `client/` and run:
 		npm install
 		npm run dev
-	- The client dev server will run (default Vite port 5173). It communicates with the backend at `http://localhost:3030` by default.
+	- The client dev server will run (default Vite port 5173).
+	- By default the client uses same-origin for API calls. For dev you can set the backend URL by creating `client/.env` and adding:
+		VITE_API_BASE=http://localhost:3030
 
 - Production build (serve from Node server):
 	- Build client: run `npm run build` inside `client/`.
+		- If you built the front-end and deployed separately, you can configure your built client's API base at build-time by setting `VITE_API_BASE` in `client/.env` (e.g. `VITE_API_BASE=https://your-backend.example.com`). If you leave it blank, the client will call the same origin (/api/*) which is the recommended setup when you deploy frontend + backend together on Vercel.
 	- Then the server will serve the built files automatically from `client/dist/` if present.
 
 Note: I left the old static `public/` HTML files in place as lightweight fallbacks that now show a short migration notice. The React client is the recommended UI going forward.

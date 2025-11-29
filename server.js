@@ -109,7 +109,22 @@ async function ensureCalendar() {
 }
 
 const app = express();
-app.use(cors());
+// Allow requests from development and production frontends. You can override using FRONTEND_URL in environment.
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'https://learning-capcha.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3030',
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // allow requests with no origin (e.g. curl, server-to-server)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true);
+    const msg = `CORS policy: origin '${origin}' not allowed`;
+    return callback(new Error(msg), false);
+  }
+}));
 app.use(bodyParser.json());
 // Serve the frontend -- prefer a built React app in client/dist, fall back to public/ for older static content
 const CLIENT_DIST = path.join(__dirname, 'client', 'dist');
@@ -125,6 +140,14 @@ if (fs.existsSync(CLIENT_DIST)) {
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
+});
+
+// Global uncaught handlers to log unexpected crashes in serverless environment
+process.on('unhandledRejection', (reason, p) => {
+  console.error('Unhandled Rejection at:', p, 'reason:', reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception thrown:', err && err.stack ? err.stack : err);
 });
 
 // In-memory maps for pending registrations, captchas, pending logins, sessions
@@ -313,6 +336,7 @@ app.post('/api/logout', (req, res)=>{
   res.json({ success: true });
 });
 
+const serverless = require('serverless-http');
 const PORT = process.env.PORT || 3030;
 
 async function start() {
@@ -321,7 +345,41 @@ async function start() {
   app.listen(PORT, ()=> console.log('Server running on', PORT, useMongo ? '(MongoDB enabled)' : '(file fallback)'));
 }
 
-start().catch(e=>{
-  console.error('Failed to start server', e && e.message);
-  process.exit(1);
-});
+if (process.env.VERCEL || process.env.GITHUB_ACTIONS || process.env.NOW) {
+  // In serverless/deploy environments, try to establish DB connection at
+  // module load time but also ensure we attempt to connect on every invocation
+  connectMongo().then(()=>ensureCalendar()).catch((e)=>console.warn('Initial Mongo connect failed:', e && e.message));
+
+  const handler = serverless(app);
+
+  // Wrap the serverless handler to attempt to connect to MongoDB on each invocation
+  module.exports = async (req, res) => {
+    try {
+      if (MONGO_URI && (!mongoose.connection || mongoose.connection.readyState !== 1)) {
+        try {
+          await connectMongo();
+          await ensureCalendar();
+        } catch (e) {
+          console.warn('Mongo connect during invocation failed:', e && e.message);
+          // don't fail here — allow fallback to file-based storage
+        }
+      }
+    } catch (wrapErr) {
+      console.error('Error while preparing handler:', wrapErr && wrapErr.stack ? wrapErr.stack : wrapErr);
+    }
+
+    try {
+      // Call the serverless handler
+      return await handler(req, res);
+    } catch (fnErr) {
+      console.error('Serverless handler error:', fnErr && fnErr.stack ? fnErr.stack : fnErr);
+      // Return a clearer 500 error to the frontend
+      try { res.statusCode = 500; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: 'Internal server error', details: String(fnErr && fnErr.message) })); } catch(e) {}
+    }
+  };
+} else {
+  start().catch(e=>{
+    console.error('Failed to start server', e && e.message);
+    process.exit(1);
+  });
+}
