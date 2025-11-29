@@ -111,7 +111,7 @@ async function ensureCalendar() {
 const app = express();
 // Allow requests from development and production frontends. You can override using FRONTEND_URL in environment.
 const allowedOrigins = [
-  process.env.FRONTEND_URL || 'https://learning-capcha.vercel.app',
+  process.env.FRONTEND_URL || 'https://learning-capcha.vercel.app/',
   'http://localhost:5173',
   'http://localhost:3030',
 ];
