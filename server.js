@@ -384,8 +384,6 @@
 //   });
 // }
 // export default server.js
-// server.js — Vercel-compatible (file I/O removed, MongoDB mandatory)
-
 const express = require('express');
 const bodyParser = require('body-parser');
 const { v4: uuidv4 } = require('uuid');
@@ -395,68 +393,78 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const svgCaptcha = require('svg-captcha');
 
-// 👉 MongoDB URI is REQUIRED on Vercel
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
-  console.error('❌ MONGO_URI environment variable is required.');
-  if (process.env.VERCEL) process.exit(1);
+  console.error('❌ MONGO_URI required');
+  process.exit(1);
 }
 
-// MongoDB Models
-let UserModel;
-let CalendarModel;
+let UserModel, CalendarModel;
 
 const connectMongo = async () => {
   if (mongoose.connection.readyState === 1) return;
+  
+  await mongoose.connect(MONGO_URI, { 
+    dbName: 'capcha_demo',
+    serverSelectionTimeoutMS: 5000 
+  });
+  console.log('✅ MongoDB connected');
 
-  try {
-    await mongoose.connect(MONGO_URI, { dbName: 'capcha_demo' });
-    console.log('✅ Connected to MongoDB');
+  const QuestionSchema = new mongoose.Schema(
+    { question: String, answer: String }, 
+    { _id: false }
+  );
+  
+  const UserSchema = new mongoose.Schema({
+    name: String,
+    email: { type: String, index: true, unique: true },
+    passwordHash: String,
+    questions: [QuestionSchema],
+    createdAt: { type: Date, default: Date.now }
+  });
+  UserModel = mongoose.model('User', UserSchema);
 
-    // User Schema
-    const QuestionSchema = new mongoose.Schema({ question: String, answer: String }, { _id: false });
-    const UserSchema = new mongoose.Schema({
-      name: String,
-      email: { type: String, index: true, unique: true },
-      passwordHash: String,
-      questions: [QuestionSchema],
-      createdAt: { type: Date, default: Date.now }
-    });
-    UserModel = mongoose.model('User', UserSchema);
-
-    // Calendar Schema
-    const DaySchema = new mongoose.Schema({ id: String, date: String, status: String, holder: String }, { _id: false });
-    const MonthSchema = new mongoose.Schema({ label: String, year: Number, month: Number, days: [DaySchema] }, { _id: false });
-    const CalendarSchema = new mongoose.Schema({ months: [MonthSchema], createdAt: { type: Date, default: Date.now } });
-    CalendarModel = mongoose.model('Calendar', CalendarSchema);
-
-  } catch (e) {
-    console.error('💥 MongoDB connection failed:', e.message);
-    throw e;
-  }
+  const DaySchema = new mongoose.Schema(
+    { id: String, date: String, status: String, holder: String }, 
+    { _id: false }
+  );
+  
+  const MonthSchema = new mongoose.Schema(
+    { label: String, year: Number, month: Number, days: [DaySchema] }, 
+    { _id: false }
+  );
+  
+  const CalendarSchema = new mongoose.Schema({
+    months: [MonthSchema],
+    createdAt: { type: Date, default: Date.now }
+  });
+  CalendarModel = mongoose.model('Calendar', CalendarSchema);
 };
 
-// Initialize calendar in DB if missing
-const ensureCalendarInDB = async () => {
+const ensureCalendar = async () => {
   const existing = await CalendarModel.findOne().exec();
   if (existing) return existing;
 
   const months = [];
   const now = new Date();
+  
   for (let m = 0; m < 6; m++) {
     const d = new Date(now.getFullYear(), now.getMonth() + m, 1);
     const monthLabel = d.toLocaleString('default', { month: 'long', year: 'numeric' });
-    const days = [3,8,13,18,23].map(day => {
+    
+    const days = [3, 8, 13, 18, 23].map(day => {
       const maxDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
       const date = new Date(d.getFullYear(), d.getMonth(), Math.min(day, maxDay));
-      const id = `${date.getFullYear()}-${date.getMonth()+1}-${date.getDate()}`;
+      const id = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+      
       return {
         id,
-        date: date.toISOString().slice(0,10),
+        date: date.toISOString().slice(0, 10),
         status: 'available',
         holder: null
       };
     });
+    
     months.push({ label: monthLabel, year: d.getFullYear(), month: d.getMonth() + 1, days });
   }
 
@@ -465,43 +473,45 @@ const ensureCalendarInDB = async () => {
   return cal;
 };
 
-// Express app
 const app = express();
 
 const allowedOrigins = [
-  process.env.FRONTEND_URL?.trim() || 'https://learning-capcha.vercel.app',
+  process.env.FRONTEND_URL || 'https://learning-capcha.vercel.app',
   'http://localhost:5173',
-  'http://localhost:3030',
+  'http://localhost:3030'
 ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
     callback(new Error(`CORS blocked: ${origin}`));
-  }
+  },
+  credentials: true
 }));
 
 app.use(bodyParser.json());
-
-// Logging
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
 });
 
-// In-memory stores (short-lived, Vercel-safe)
 const pendingRegs = {};
 const captchas = {};
 const pendingLogin = {};
 const sessions = {};
 const reserveTimers = {};
 
-// Cleanup
 setInterval(() => {
   const now = Date.now();
-  for (const k in captchas) if (captchas[k].expiresAt < now) delete captchas[k];
-  for (const k in pendingRegs) if (pendingRegs[k].expiresAt < now) delete pendingRegs[k];
+  Object.keys(captchas).forEach(k => {
+    if (captchas[k].expiresAt < now) delete captchas[k];
+  });
+  Object.keys(pendingRegs).forEach(k => {
+    if (pendingRegs[k].expiresAt < now) delete pendingRegs[k];
+  });
+  Object.keys(pendingLogin).forEach(k => {
+    if (pendingLogin[k].expiresAt < now) delete pendingLogin[k];
+  });
 }, 30_000);
 
 const QUESTIONS = [
@@ -510,28 +520,31 @@ const QUESTIONS = [
   'What is your favourite book?',
 ];
 
+// API Routes
+app.get('/api/ping', (req, res) => {
+  res.json({ ok: true, time: Date.now() });
+});
+
 app.get('/api/questions', (req, res) => {
   res.json({ questions: QUESTIONS });
 });
 
-app.get('/api/ping', (req, res) => res.json({ ok: true, time: Date.now() }));
-
-// CAPTCHA (no file system)
 app.get('/api/captcha', (req, res) => {
-  const cap = svgCaptcha.create({ noise: 2, size: 5, width: 160, height: 50, ignoreChars: '0oO1ilI' });
+  const cap = svgCaptcha.create({ noise: 2, size: 5, width: 160, height: 50 });
   const id = uuidv4();
   captchas[id] = { text: cap.text.toLowerCase(), expiresAt: Date.now() + 60_000 };
   res.json({ captchaId: id, svg: cap.data });
 });
 
-// REGISTER STAGE 1
 app.post('/api/register-stage1', async (req, res) => {
   try {
     await connectMongo();
     const { name, email, password, confirmPassword } = req.body || {};
+    
     if (!name || !email || !password || !confirmPassword) {
       return res.status(400).json({ error: 'All fields required' });
     }
+    
     if (password !== confirmPassword) {
       return res.status(400).json({ error: 'Passwords do not match' });
     }
@@ -543,33 +556,36 @@ app.post('/api/register-stage1', async (req, res) => {
 
     const passHash = await bcrypt.hash(password, 10);
     const regId = uuidv4();
+    
     pendingRegs[regId] = {
       name, email, passwordHash: passHash,
       expiresAt: Date.now() + 15 * 60_000
     };
+    
     res.json({ registrationId: regId });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'Internal error' });
+    res.status(500).json({ error: 'Registration failed' });
   }
 });
 
-// REGISTER STAGE 2
 app.post('/api/register-stage2', async (req, res) => {
   try {
     await connectMongo();
     const { registrationId, answers } = req.body || {};
+    
     if (!registrationId || !Array.isArray(answers) || answers.length !== 3) {
       return res.status(400).json({ error: 'Invalid payload' });
     }
+    
     const pending = pendingRegs[registrationId];
     if (!pending) {
       return res.status(400).json({ error: 'Registration expired' });
     }
 
     const questions = answers.map(a => ({
-      question: (a.question || '').toString(),
-      answer: (a.answer || '').toString().trim().toLowerCase()
+      question: a.question?.toString() || '',
+      answer: a.answer?.toString().trim().toLowerCase() || ''
     }));
 
     const userDoc = new UserModel({
@@ -578,8 +594,10 @@ app.post('/api/register-stage2', async (req, res) => {
       passwordHash: pending.passwordHash,
       questions
     });
+    
     await userDoc.save();
     delete pendingRegs[registrationId];
+    
     res.json({ success: true });
   } catch (e) {
     console.error(e);
@@ -587,11 +605,11 @@ app.post('/api/register-stage2', async (req, res) => {
   }
 });
 
-// LOGIN STEP 1
 app.post('/api/login-step1', async (req, res) => {
   try {
     await connectMongo();
     const { username, password, captchaId, captchaAnswer } = req.body || {};
+    
     if (!username || !password || !captchaId || !captchaAnswer) {
       return res.status(400).json({ error: 'Missing fields' });
     }
@@ -608,7 +626,11 @@ app.post('/api/login-step1', async (req, res) => {
     }
 
     const loginId = uuidv4();
-    pendingLogin[loginId] = { userId: user._id.toString(), expiresAt: Date.now() + 5 * 60_000 };
+    pendingLogin[loginId] = { 
+      userId: user._id.toString(), 
+      expiresAt: Date.now() + 5 * 60_000 
+    };
+    
     res.json({ loginId, questions: user.questions.map(q => q.question) });
   } catch (e) {
     console.error(e);
@@ -616,51 +638,67 @@ app.post('/api/login-step1', async (req, res) => {
   }
 });
 
-// LOGIN STEP 2
-app.post('/api/login-step2', (req, res) => {
-  const { loginId, answers } = req.body || {};
-  if (!loginId || !Array.isArray(answers) || answers.length !== 3) {
-    return res.status(400).json({ error: 'Invalid payload' });
-  }
-  const pending = pendingLogin[loginId];
-  if (!pending) {
-    return res.status(400).json({ error: 'Login session expired' });
-  }
+app.post('/api/login-step2', async (req, res) => {
+  try {
+    await connectMongo();
+    const { loginId, answers } = req.body || {};
+    
+    if (!loginId || !Array.isArray(answers) || answers.length !== 3) {
+      return res.status(400).json({ error: 'Invalid payload' });
+    }
+    
+    const pending = pendingLogin[loginId];
+    if (!pending) {
+      return res.status(400).json({ error: 'Login session expired' });
+    }
 
-  // We'll resolve user async
-  connectMongo()
-    .then(() => UserModel.findById(pending.userId).exec())
-    .then(user => {
-      if (!user) return res.status(400).json({ error: 'User not found' });
-      const good = user.questions.every((q, i) =>
-        q.answer === (answers[i] || '').toString().trim().toLowerCase()
-      );
-      if (!good) return res.status(400).json({ error: 'Security answers incorrect' });
+    const user = await UserModel.findById(pending.userId).exec();
+    if (!user) {
+      return res.status(400).json({ error: 'User not found' });
+    }
 
-      const token = uuidv4();
-      sessions[token] = { userId: user._id.toString(), createdAt: Date.now() };
-      delete pendingLogin[loginId];
-      res.json({
-        success: true,
-        token,
-        user: { id: user._id.toString(), name: user.name, email: user.email }
-      });
-    })
-    .catch(e => {
-      console.error(e);
-      res.status(500).json({ error: 'Verification failed' });
+    const good = user.questions.every((q, i) =>
+      q.answer === (answers[i] || '').toString().trim().toLowerCase()
+    );
+    
+    if (!good) {
+      return res.status(400).json({ error: 'Security answers incorrect' });
+    }
+
+    const token = uuidv4();
+    sessions[token] = { userId: user._id.toString(), createdAt: Date.now() };
+    delete pendingLogin[loginId];
+    
+    res.json({
+      success: true,
+      token,
+      user: { id: user._id.toString(), name: user.name, email: user.email }
     });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Verification failed' });
+  }
 });
 
-// CALENDAR
 app.get('/api/calendar', async (req, res) => {
   try {
     await connectMongo();
-    const cal = await ensureCalendarInDB();
-    res.json(cal);
+    const cal = await ensureCalendar();
+    res.json({ months: cal.months });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load calendar' });
+  }
+});
+
+app.get('/api/calendar/status', async (req, res) => {
+  try {
+    await connectMongo();
+    const cal = await CalendarModel.findOne().exec();
+    res.json({ months: cal?.months || [] });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load status' });
   }
 });
 
@@ -668,11 +706,18 @@ app.post('/api/calendar/reserve', async (req, res) => {
   try {
     await connectMongo();
     const { token, dateId } = req.body || {};
-    if (!token || !dateId) return res.status(400).json({ error: 'Missing fields' });
-    if (!sessions[token]) return res.status(401).json({ error: 'Invalid session' });
+    
+    if (!token || !dateId) {
+      return res.status(400).json({ error: 'Missing fields' });
+    }
+    
+    if (!sessions[token]) {
+      return res.status(401).json({ error: 'Invalid session' });
+    }
 
     const cal = await CalendarModel.findOne().exec();
     let reserved = false;
+    
     for (const month of cal.months) {
       for (const d of month.days) {
         if (d.id === dateId && d.status === 'available') {
@@ -680,8 +725,8 @@ app.post('/api/calendar/reserve', async (req, res) => {
           d.holder = sessions[token].userId;
           reserved = true;
 
-          // Auto-book after 5s
           if (reserveTimers[dateId]) clearTimeout(reserveTimers[dateId]);
+          
           reserveTimers[dateId] = setTimeout(async () => {
             try {
               const updated = await CalendarModel.findOne().exec();
@@ -696,19 +741,22 @@ app.post('/api/calendar/reserve', async (req, res) => {
               await CalendarModel.findOneAndUpdate({}, { months: updated.months });
               delete reserveTimers[dateId];
             } catch (err) {
-              console.error('Auto-book failed:', err);
+              console.error(err);
             }
           }, 5000);
+          
           break;
         }
       }
       if (reserved) break;
     }
 
-    if (!reserved) return res.status(400).json({ error: 'Date not available' });
+    if (!reserved) {
+      return res.status(400).json({ error: 'Date not available' });
+    }
 
     await CalendarModel.findOneAndUpdate({}, { months: cal.months });
-    res.json({ success: true, message: 'Reserved. Will book in 5s.' });
+    res.json({ success: true, message: 'Reserved' });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Reservation failed' });
@@ -721,14 +769,17 @@ app.post('/api/logout', (req, res) => {
   res.json({ success: true });
 });
 
-// Serve static frontend (if exists)
-const CLIENT_DIST = require('path').join(__dirname, 'client', 'dist');
-if (require('fs').existsSync(CLIENT_DIST)) {
-  app.use(express.static(CLIENT_DIST));
-  app.get('*', (req, res) => res.sendFile(require('path').join(CLIENT_DIST, 'index.html')));
+if (process.env.VERCEL) {
+  module.exports = app;
 } else {
-  app.get('*', (req, res) => res.json({ message: 'Frontend not built. Use React client separately.' }));
+  const PORT = process.env.PORT || 3030;
+  connectMongo()
+    .then(() => ensureCalendar())
+    .then(() => {
+      app.listen(PORT, () => console.log(`🚀 Server: http://localhost:${PORT}`));
+    })
+    .catch(e => {
+      console.error(e);
+      process.exit(1);
+    });
 }
-
-// Export for Vercel
-module.exports = app;
