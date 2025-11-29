@@ -383,3 +383,4 @@ if (process.env.VERCEL || process.env.GITHUB_ACTIONS || process.env.NOW) {
     process.exit(1);
   });
 }
+export default server.js
